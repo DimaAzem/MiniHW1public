@@ -1,0 +1,5 @@
+# Convenience file for a single local venv (used by run.bat / local dev
+# without Docker). Each service also has its own requirements.txt used by
+# its own Dockerfile for isolated container builds - keep both in sync.
+-r backend/requirements.txt
+-r frontend/requirements.txt

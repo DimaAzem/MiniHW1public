@@ -1,0 +1,101 @@
+# Two networks, not one, so isolation is enforced at the network layer:
+# `frontend` is never attached to `private_net`, so it has no possible route
+# to `db` even if compromised - stronger than "just not exposing a port".
+networks:
+  public_net:
+    driver: bridge
+  private_net:
+    driver: bridge
+    internal: true  # no route out; only backend + db ever attach here
+
+services:
+  db:
+    image: mongo:6.0
+    container_name: boxdrop_db
+    networks:
+      - private_net
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: boxdrop_backend
+    ports:
+      - "8000:8000"
+    networks:
+      - public_net
+      - private_net
+    environment:
+      - MONGO_URI=mongodb://db:27017/
+      - MONGO_DB_NAME=boxdrop_db
+      # NEVER use the code-level fallback in a real deployment - set this via
+      # a host-level .env file (gitignored). Losing/rotating it just forces
+      # everyone to log in again (no stored-data-loss risk), unlike a data
+      # encryption key, so no key-persistence machinery is needed here.
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-}
+      # Gated test-injection endpoints (/api/test/*) - NEVER set true in a
+      # real deployment; defaults off. See backend/api/test_hooks.py.
+      - ENABLE_TEST_ENDPOINTS=${ENABLE_TEST_ENDPOINTS:-false}
+      - SEED_ON_STARTUP=${SEED_ON_STARTUP:-false}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  worker:
+    # Reuses the backend's own image/build - same dependencies, no image to
+    # maintain twice - just a different entrypoint (a polling loop instead
+    # of the HTTP server). Talks only to MongoDB, never serves HTTP, so it
+    # has no reason to be on public_net at all.
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: boxdrop_worker
+    command: ["python", "-m", "backend.worker"]
+    networks:
+      - private_net
+    environment:
+      - MONGO_URI=mongodb://db:27017/
+      - MONGO_DB_NAME=boxdrop_db
+      - WORKER_INTERVAL_SECONDS=${WORKER_INTERVAL_SECONDS:-30}
+    # Overrides the backend image's inherited HEALTHCHECK (which curls a
+    # local HTTP server) - the worker doesn't serve HTTP, so that check
+    # would fail forever otherwise. "docker logs boxdrop_worker" is the
+    # real way to check on it.
+    healthcheck:
+      disable: true
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: boxdrop_frontend
+    ports:
+      - "8501:8501"
+    networks:
+      - public_net  # deliberately NOT on private_net - cannot reach `db` at all
+    environment:
+      - BACKEND_API_URL=http://backend:8000/api
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  mongo_data:

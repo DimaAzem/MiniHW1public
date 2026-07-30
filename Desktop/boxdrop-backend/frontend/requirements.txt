@@ -1,0 +1,11 @@
+# --- UI framework ---
+streamlit==1.59.2
+
+# --- HTTP client for talking to the FastAPI backend ---
+requests==2.34.2
+
+# --- Tabular rendering for the packages table ---
+pandas==3.0.3
+
+# --- Local .env loading for IMAP/backend configuration defaults ---
+python-dotenv==1.2.2
